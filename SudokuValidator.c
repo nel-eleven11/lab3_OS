@@ -82,30 +82,29 @@ int checkSubgrid(int startRow, int startCol) {
 void* threadCheckColumns(void* arg) {
     pid_t tid = (pid_t) syscall(SYS_gettid);
     printf("[HILO] Revisando columnas. TID del hilo = %d\n", tid);
-    int c; 
 
 #ifdef _OPENMP
-    // Paraleliza el bucle de 0..8 para columnas
-    // Usamos 'private(c)' para que la variable c sea local a cada hilo
-    // En caso de encontrar columna inválida, usamos #pragma omp atomic
-    // para marcar validCols=0 de forma segura.
-#pragma omp parallel for default(none) shared(validCols, sudoku) schedule(dynamic) private(c)
+    // Como este ciclo tiene 9 iteraciones, se establece el número de hilos en 9
+    omp_set_num_threads(9);
+    // Se paraleliza el for con schedule(dynamic)
+    #pragma omp parallel for default(none) shared(validCols, sudoku) schedule(dynamic)
 #endif
     for (int c = 0; c < 9; c++) {
         if (!checkColumn(c)) {
-            // Si un hilo detecta columna inválida, pone validCols=0
-#pragma omp atomic write 
+#ifdef _OPENMP
+            #pragma omp atomic write 
+#endif
             validCols = 0;
         }
     }
-
     pthread_exit(0);
 }
 
 // --------------------------------------------------------------
 int main(int argc, char* argv[]) {
 
-        // Establecer el número de hilos a 1 para OpenMP.
+    // En este punto se establece un valor inicial; sin embargo, luego se
+    // modificará según el ciclo paralelo a ejecutar.
 #ifdef _OPENMP
     omp_set_num_threads(1);
 #endif
@@ -151,22 +150,24 @@ int main(int argc, char* argv[]) {
     }
 
     // 3) Revisar subarreglos 3x3 (indices 0,3,6)
-    // Podemos paralelizar el doble bucle sr=0..6(+=3), sc=0..6(+=3).
-    // O usar 'collapse(2)' para fusionar niveles.
-    // Cuidado: validSubs es compartida.
 #ifdef _OPENMP
-int sr, sc;
-#pragma omp parallel for default(none) shared(validSubs, sudoku) schedule(dynamic) private(sr, sc) collapse(2)
-#endif
-    for (int sr = 0; sr < 9; sr += 3) {
-        for (int sc = 0; sc < 9; sc += 3) {
-            if (!checkSubgrid(sr, sc)) {
-                // Marcamos validSubs=0 de forma segura:
-#pragma omp atomic write 
-                validSubs = 0;
+    {
+        // Para este doble for (9 iteraciones en total), usamos 9 hilos.
+        omp_set_num_threads(9);
+        int sr, sc;
+        #pragma omp parallel for default(none) shared(validSubs, sudoku) schedule(dynamic) collapse(2)
+        for (sr = 0; sr < 9; sr += 3) {
+            for (sc = 0; sc < 9; sc += 3) {
+                if (!checkSubgrid(sr, sc)) {
+    #ifdef _OPENMP
+                    #pragma omp atomic write 
+    #endif
+                    validSubs = 0;
+                }
             }
         }
     }
+#endif
 
     // 4) fork para ejecutar ps -p <pidPadre> -lLf
     pid_t pidPadre = getpid();
@@ -179,11 +180,10 @@ int sr, sc;
         char padreStr[32];
         sprintf(padreStr, "%d", pidPadre);
         execlp("ps", "ps", "-p", padreStr, "-lLf", (char *)NULL);
-
         perror("execlp ps -p (primer fork)");
         exit(1);
     }
-    // Proceso padre continua
+    // Proceso padre continúa
 
     // 5) Crear un pthread que revise las columnas
     pthread_t hiloCols;
@@ -192,29 +192,28 @@ int sr, sc;
         fprintf(stderr, "Error al crear hilo: %s\n", strerror(err));
         return 1;
     }
-
-    // Esperar a que el hilo termine
     pthread_join(hiloCols, NULL);
-
-    // Mostrar ID del thread principal (este)
     pid_t threadId = syscall(SYS_gettid);
     printf("[PADRE] pthread_join() completado. TID del thread principal = %d\n", threadId);
-
-    // Esperar al proceso hijo que ejecuta ps
     waitpid(pidHijo1, NULL, 0);
 
     // 6) Revisar filas en el proceso padre
-    // Paralelizamos el for de 0..8 para filas
 #ifdef _OPENMP
-int r;
-#pragma omp parallel for default(none) shared(validRows, sudoku) schedule(dynamic) private(r)
-#endif
-    for (int r = 0; r < 9; r++) {
-        if (!checkRow(r)) {
-#pragma omp atomic write 
-            validRows = 0;
+    {
+        // Para el bucle de filas, se desea un thread por iteración (9 en total).
+        omp_set_num_threads(9);
+        int r;
+        #pragma omp parallel for default(none) shared(validRows, sudoku) schedule(dynamic)
+        for (r = 0; r < 9; r++) {
+            if (!checkRow(r)) {
+    #ifdef _OPENMP
+                #pragma omp atomic write 
+    #endif
+                validRows = 0;
+            }
         }
     }
+#endif
 
     // 7) Validar solución
     int solucionValida = (validRows && validCols && validSubs);
@@ -234,12 +233,9 @@ int r;
         char padreStr[32];
         sprintf(padreStr, "%d", pidPadre);
         execlp("ps", "ps", "-p", padreStr, "-lLf", (char*) NULL);
-
         perror("execlp ps -p (segundo fork)");
         exit(1);
     }
-
-    // Esperar al segundo hijo
     waitpid(pidHijo2, NULL, 0);
 
     // Liberar mmap
