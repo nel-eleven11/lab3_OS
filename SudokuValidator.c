@@ -11,10 +11,11 @@
 #include <pthread.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <stdbool.h>
 
 // Incluir OpenMP (compilar con -fopenmp)
 #ifdef _OPENMP
-  #include <omp.h>
+    #include <omp.h>
 #endif
 
 // Arreglo global 9x9
@@ -80,14 +81,20 @@ int checkSubgrid(int startRow, int startCol) {
 // --------------------------------------------------------------
 // Función que se ejecutará en el hilo para revisar columnas
 void* threadCheckColumns(void* arg) {
-    pid_t tid = (pid_t) syscall(SYS_gettid);
-    printf("[HILO] Revisando columnas. TID del hilo = %d\n", tid);
-
+    // Habilitar el anidamiento de regiones paralelas
 #ifdef _OPENMP
+    omp_set_nested(true);
     // Como este ciclo tiene 9 iteraciones, se establece el número de hilos en 9
     omp_set_num_threads(9);
-    // Se paraleliza el for con schedule(dynamic)
-    #pragma omp parallel for default(none) shared(validCols, sudoku) schedule(dynamic)
+#endif
+
+    pid_t tid = (pid_t) syscall(SYS_gettid);
+    printf("[HILO] Revisando columnas. TID del hilo = %d\n", tid);
+    int c;
+
+#ifdef _OPENMP
+    // Se paraleliza el for, pero se comenta la cláusula schedule(dynamic)
+    #pragma omp parallel for default(none) shared(validCols, sudoku) /*schedule(dynamic)*/ private(c)
 #endif
     for (int c = 0; c < 9; c++) {
         if (!checkColumn(c)) {
@@ -103,10 +110,9 @@ void* threadCheckColumns(void* arg) {
 // --------------------------------------------------------------
 int main(int argc, char* argv[]) {
 
-    // En este punto se establece un valor inicial; sin embargo, luego se
-    // modificará según el ciclo paralelo a ejecutar.
 #ifdef _OPENMP
-    omp_set_num_threads(1);
+    omp_set_nested(true);   // Habilitamos anidamiento en main (si se usen regiones paralelas)
+    omp_set_num_threads(1); // Valor inicial, se modifica en cada bloque según convenga
 #endif
 
     if (argc < 2) {
@@ -149,19 +155,20 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // 3) Revisar subarreglos 3x3 (indices 0,3,6)
+    // 3) Revisar subarreglos 3x3 (índices 0,3,6)
 #ifdef _OPENMP
     {
+        omp_set_nested(true);
         // Para este doble for (9 iteraciones en total), usamos 9 hilos.
         omp_set_num_threads(9);
         int sr, sc;
-        #pragma omp parallel for default(none) shared(validSubs, sudoku) schedule(dynamic) collapse(2)
+        #pragma omp parallel for default(none) shared(validSubs, sudoku) schedule(dynamic) private(sr, sc) collapse(2)
         for (sr = 0; sr < 9; sr += 3) {
             for (sc = 0; sc < 9; sc += 3) {
                 if (!checkSubgrid(sr, sc)) {
-    #ifdef _OPENMP
+#ifdef _OPENMP
                     #pragma omp atomic write 
-    #endif
+#endif
                     validSubs = 0;
                 }
             }
@@ -200,15 +207,16 @@ int main(int argc, char* argv[]) {
     // 6) Revisar filas en el proceso padre
 #ifdef _OPENMP
     {
+        omp_set_nested(true);
         // Para el bucle de filas, se desea un thread por iteración (9 en total).
         omp_set_num_threads(9);
         int r;
-        #pragma omp parallel for default(none) shared(validRows, sudoku) schedule(dynamic)
+        #pragma omp parallel for default(none) shared(validRows, sudoku) schedule(dynamic) private(r)
         for (r = 0; r < 9; r++) {
             if (!checkRow(r)) {
-    #ifdef _OPENMP
+#ifdef _OPENMP
                 #pragma omp atomic write 
-    #endif
+#endif
                 validRows = 0;
             }
         }
