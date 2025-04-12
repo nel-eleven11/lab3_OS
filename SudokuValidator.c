@@ -89,12 +89,12 @@ void* threadCheckColumns(void* arg) {
     // Usamos 'private(c)' para que la variable c sea local a cada hilo
     // En caso de encontrar columna inválida, usamos #pragma omp atomic
     // para marcar validCols=0 de forma segura.
-#pragma omp parallel for default(none) shared(validCols, sudoku) private(c)
+#pragma omp parallel for default(none) shared(validCols, sudoku) schedule(dynamic) private(c)
 #endif
     for (int c = 0; c < 9; c++) {
         if (!checkColumn(c)) {
             // Si un hilo detecta columna inválida, pone validCols=0
-#pragma omp atomic write
+#pragma omp atomic write 
             validCols = 0;
         }
     }
@@ -104,6 +104,11 @@ void* threadCheckColumns(void* arg) {
 
 // --------------------------------------------------------------
 int main(int argc, char* argv[]) {
+
+        // Establecer el número de hilos a 1 para OpenMP.
+#ifdef _OPENMP
+    omp_set_num_threads(1);
+#endif
 
     if (argc < 2) {
         fprintf(stderr, "Uso: %s <archivo_con_81_digitos>\n", argv[0]);
@@ -151,13 +156,13 @@ int main(int argc, char* argv[]) {
     // Cuidado: validSubs es compartida.
 #ifdef _OPENMP
 int sr, sc;
-#pragma omp parallel for default(none) shared(validSubs, sudoku) private(sr, sc) collapse(2)
+#pragma omp parallel for default(none) shared(validSubs, sudoku) schedule(dynamic) private(sr, sc) collapse(2)
 #endif
     for (int sr = 0; sr < 9; sr += 3) {
         for (int sc = 0; sc < 9; sc += 3) {
             if (!checkSubgrid(sr, sc)) {
                 // Marcamos validSubs=0 de forma segura:
-#pragma omp atomic write
+#pragma omp atomic write 
                 validSubs = 0;
             }
         }
@@ -202,11 +207,11 @@ int sr, sc;
     // Paralelizamos el for de 0..8 para filas
 #ifdef _OPENMP
 int r;
-#pragma omp parallel for default(none) shared(validRows, sudoku) private(r)
+#pragma omp parallel for default(none) shared(validRows, sudoku) schedule(dynamic) private(r)
 #endif
     for (int r = 0; r < 9; r++) {
         if (!checkRow(r)) {
-#pragma omp atomic write
+#pragma omp atomic write 
             validRows = 0;
         }
     }
